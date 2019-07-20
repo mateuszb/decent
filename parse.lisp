@@ -1,0 +1,67 @@
+(in-package :decent)
+
+(defun is-separator? (c sep)
+  (char= c sep))
+
+(defun consume-token (in &optional (separator #\space))
+  (loop for c = (peek-char nil in nil :eof)
+     then (peek-char nil in nil :eof)
+     until (or (eq :eof c) (is-separator? c separator))
+     collect (read-char in) into tok
+     finally
+       (unless (eq :eof c)
+	 (read-char in))
+       (return (coerce tok 'string))))
+
+(defun read-method (tok)
+  (string-case (tok)
+    ("GET" :GET)
+    ("POST" :POST)
+    ("HEAD" :HEAD)
+    ("PUT" :PUT)
+    ("DELETE" :DELETE)
+    ("OPTIONS" :OPTIONS)
+    ("TRACE" :TRACE)
+    ("CONNECT" :CONNECT)
+    (t :UNSUPPORTED-METHOD)))
+
+(defun read-proto (tok)
+  (string-case (tok)
+    ("HTTP/1.1" :http1.1)
+    ("HTTP/1.0" :http1.0)
+    (t :unsupported-protocol)))
+
+(defun parse-request-line (line)
+  (with-input-from-string (in line)
+    (let ((method (read-method (consume-token in)))
+	  (uri (consume-token in))
+	  (proto (read-proto (consume-token in))))
+      (values method uri proto))))
+
+(defun read-header-name (tok)
+  (subseq tok 0 (length tok)))
+
+(defun read-header-value (in)
+  (let ((line (read-line in)))
+    (string-trim '(#\space) line)))
+
+(defun parse-header-line (line)
+  (with-input-from-string (in line)
+    (let ((key (read-header-name (consume-token in #\:)))
+	  (val (read-header-value in)))
+      (values key val))))
+
+(defun parse-request (lines)
+  (let ((req (multiple-value-list (parse-request-line (car lines))))
+	(hdrs
+	 (loop for hdrline in (cdr lines)
+	    with hdrs = (make-hash-table :test 'equal :synchronized t)
+	    do
+	      (multiple-value-bind (key val) (parse-header-line hdrline)
+		(format t "~a: ~a~%" key val)
+		(setf (gethash key hdrs) val))
+	    finally (return hdrs))))
+    (make-http-request :method (first req)
+		       :uri (second req)
+		       :proto (third req)
+		       :headers hdrs)))

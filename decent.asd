@@ -2,9 +2,11 @@
   :version "0.1.0"
   :author "Mateusz Berezecki"
   :license "BSD"
-  :depends-on ("reactor")
+  :depends-on ("reactor" "string-case" "cl-speedy-queue")
   :components ((:file "packages")
-	       (:file "server" :depends-on ("packages")))
+	       (:file "request" :depends-on ("packages"))
+	       (:file "parse" :depends-on ("packages" "request"))
+	       (:file "server" :depends-on ("parse" "packages")))
   :in-order-to ((test-op (test-op "decent/test")))
   :description "a small http web server")
 
