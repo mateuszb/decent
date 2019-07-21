@@ -174,8 +174,7 @@
 		(split-receive socket conn rxbytes)
 		(if (try-parse conn)
 		    (let* ((reqlines (nreverse lines))
-			   (resp (process-request
-				  (parse-request reqlines)))
+			   (resp (process-request (parse-request reqlines)))
 			   (txbuf (format-response resp)))
 
 		      ;; append response to the send queue

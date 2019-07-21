@@ -31,10 +31,25 @@
     ("HTTP/1.0" :http1.0)
     (t :unsupported-protocol)))
 
+(defun find-separators (uri)
+  (mapcan (lambda (x y)
+	    (if (or (char= x #\?)) (list x y) nil))
+	  (map 'list #'identity uri)
+	  (loop for i from 0 below (length uri) collect i)))
+
+(defun parse-uri-path (uri)
+  (let ((path nil) (params nil))
+    (let ((position (find-separators uri)))
+      (if position
+	  (setf path (subseq uri 0 (cadr position))
+		params (subseq uri (1+ (cadr position))))
+	  (setf path uri)))
+    (cons path params)))
+
 (defun parse-request-line (line)
   (with-input-from-string (in line)
     (let ((method (read-method (consume-token in)))
-	  (uri (consume-token in))
+	  (uri (parse-uri-path (consume-token in)))
 	  (proto (read-proto (consume-token in))))
       (values method uri proto))))
 
@@ -62,6 +77,7 @@
 		(setf (gethash key hdrs) val))
 	    finally (return hdrs))))
     (make-http-request :method (first req)
-		       :uri (second req)
+		       :uri (car (second req))
+		       :params (cdr (second req))
 		       :proto (third req)
 		       :headers hdrs)))

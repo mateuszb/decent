@@ -2,7 +2,7 @@
   :version "0.1.0"
   :author "Mateusz Berezecki"
   :license "BSD"
-  :depends-on ("reactor" "string-case" "cl-speedy-queue")
+  :depends-on ("reactor" "string-case" "cl-speedy-queue" "spinneret")
   :components ((:file "packages")
 	       (:file "request" :depends-on ("packages"))
 	       (:file "parse" :depends-on ("packages" "request"))
