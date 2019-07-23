@@ -1,8 +1,8 @@
 (defpackage decent
   (:use :cl
+	:socket
 	:reactor
 	:reactor.dispatch
-	:sb-bsd-sockets
 	:string-case
 	:cl-speedy-queue
 	:spinneret))

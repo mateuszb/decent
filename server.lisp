@@ -49,56 +49,47 @@
 
 (defvar *connections*)
 (defvar *requests*)
-
-(defun make-listen-socket (port)
-  (let ((socket (make-instance 'inet-socket :type :stream :protocol :tcp)))
-    (setf (sockopt-reuse-address socket) t)
-    (socket-bind socket #(0 0 0 0) port)
-    (setf (non-blocking-mode socket) t)
-    socket))
-
-(defun start-listening (socket)
-  (socket-listen socket 10))
-
-(defun stop-listening (socket)
-  (socket-close socket))
-
+(defvar *listen-socket*)
 (defvar *stop* nil)
+
 (defun start (&optional (port 5000))
-  (sb-thread:make-thread
-   (lambda ()
-     (let ((dispatcher (make-dispatcher))
-	   (*connections* (make-hash-table)))
-       (with-dispatcher (dispatcher)
-	 (let ((accept-socket (make-listen-socket port)))
-	   (on-read accept-socket #'accept-new-http-connection)
+  (let ((dispatcher (make-dispatcher))
+	(*connections* (make-hash-table)))
+    (with-dispatcher (dispatcher)
+      (let ((srv-socket (make-tcp-listen-socket port)))
+	(set-non-blocking srv-socket)
 
-	   (start-listening accept-socket)
-	   (loop until *stop*
-	      do
-		(format t "waiting for events...~%")
-		(dispatch-events (wait-for-events)))
+	(on-read srv-socket #'accept-new-http-connection)
 
-	   (loop for sock being the hash-key in *connections*
-	      using (hash-value val)
-	      do
-		(rem-socket sock)
-		(remhash sock *connections*)
-		(socket-close sock))
+	(loop until *stop*
+	   do
+	     (let ((events (wait-for-events)))
+	       (format t "events=~a~%" events)
+	       (dispatch-events events)))
 
-	   (stop-listening accept-socket)))))))
+	(loop for sock being the hash-key in *connections*
+	   using (hash-value val)
+	   do
+	     (rem-socket sock)
+	     (remhash sock *connections*)
+	     (disconnect sock))
+
+	(disconnect srv-socket)))))
 
 (defun accept-new-http-connection (ctx event)
   (declare (ignore event))
   (format t "new connection handler~%")
   (with-slots ((listen-socket reactor.dispatch::socket)) ctx
-    (let ((new-socket nil))
-      (setf new-socket (socket-accept listen-socket))
-      (setf (non-blocking-mode new-socket) t)
-      (setf (gethash new-socket *connections*) (make-http-connection))
-      (format t "about to add rx handler...~%")
-      (on-read new-socket #'http-rx-handler)
-      t)))
+    (loop
+       do
+	 (handler-case
+	     (let ((new-socket (accept listen-socket)))
+	       (set-non-blocking new-socket)
+	       (setf (gethash new-socket *connections*) (make-http-connection))
+	       (on-read new-socket #'http-rx-handler))
+	   (socket-error (err)
+	     (format t "done accepting~%")
+	     (loop-finish))))))
 
 (defun make-displaced-buffer (buf pos len &optional (type '(unsigned-byte 8)))
   (make-array len
@@ -108,8 +99,9 @@
 
 (defun displaced-receive (socket buf pos len)
   (let ((buf (make-displaced-buffer buf pos len)))
-    (multiple-value-bind (buf len) (socket-receive socket buf len)
-      len)))
+    (let ((rxlen (receive socket buf)))
+      (format t "received ~a bytes~%" rxlen)
+      rxlen)))
 
 (defun split-receive (socket http-conn bytes-to-read)
   (let ((rxring (slot-value http-conn 'rxbuf)))
@@ -160,24 +152,25 @@
 		;;(del-write socket)
 		(rem-socket socket)
 		(remhash socket *connections*)
-		(socket-close socket)))))))))
+		(disconnect socket)
+		))))))))
 
 (defun http-rx-handler (ctx event)
   (with-slots ((socket reactor.dispatch::socket)) ctx
     (format t "RX handler called with event '~a'~%" event)
-    (let ((rxbytes (min 4096 (getf event :bytes-in)))
+    (let ((rxbytes (max 4096 (min 4096 (getf event :bytes-in))))
 	  (conn (gethash socket *connections*)))
       (with-slots (rxbuf lines complete) conn
 	(unless (ring-buffer-full? rxbuf)
 	  (when (> rxbytes 0)
-	      (progn
-		(split-receive socket conn rxbytes)
-		(if (try-parse conn)
-		    (let* ((reqlines (nreverse lines))
-			   (resp (process-request (parse-request reqlines)))
-			   (txbuf (format-response resp)))
+	    (progn
+	      (split-receive socket conn rxbytes)
+	      (if (try-parse conn)
+		  (let* ((reqlines (nreverse lines))
+			 (resp (process-request (parse-request reqlines)))
+			 (txbuf (format-response resp)))
 
-		      ;; append response to the send queue
+		    ;; append response to the send queue
 		      (enqueue (list
 				(cons :xfered 0)
 				(cons :size (length txbuf))
@@ -238,4 +231,4 @@
     (princ (third resp) out)))
 
 (defun send-response (socket resp)
-  (socket-send socket resp (length resp)))
+  (send socket resp))

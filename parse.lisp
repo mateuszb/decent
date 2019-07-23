@@ -73,7 +73,7 @@
 	    with hdrs = (make-hash-table :test 'equal :synchronized t)
 	    do
 	      (multiple-value-bind (key val) (parse-header-line hdrline)
-		(format t "~a: ~a~%" key val)
+		;(format t "~a: ~a~%" key val)
 		(setf (gethash key hdrs) val))
 	    finally (return hdrs))))
     (make-http-request :method (first req)
