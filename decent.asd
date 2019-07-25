@@ -11,7 +11,8 @@
   :components ((:file "packages")
 	       (:file "request" :depends-on ("packages"))
 	       (:file "parse" :depends-on ("packages" "request"))
-	       (:file "server" :depends-on ("parse" "packages")))
+	       (:file "connection" :depends-on ("packages"))
+	       (:file "server" :depends-on ("packages" "parse" "connection")))
   :in-order-to ((test-op (test-op "decent/test")))
   :description "a small http web server")
 

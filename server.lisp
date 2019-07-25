@@ -2,52 +2,7 @@
 
 (defparameter +BUFFER-SIZE+ 4096)
 
-(defstruct ringbuffer
-  (buffer (make-array +BUFFER-SIZE+ :element-type '(unsigned-byte 8)))
-  (capacity +BUFFER-SIZE+)
-  (read 0)
-  (write 0))
 
-(defstruct http-connection
-  (rxbuf (make-ringbuffer))
-  (rxpos 0)
-
-  (complete nil)
-  (lines nil)
-  (txq (make-queue 16)))
-
-(defun uwrap (x)
-  (logand x #xFFFFFFFF))
-
-(defun mask (x)
-  (logand x (1- +BUFFER-SIZE+)))
-
-(defun ring-buffer-size (buf)
-  (with-slots (read write) buf
-    (- write read)))
-
-(defun ring-buffer-full? (buf)
-  (with-slots (buffer) buf
-    (= (ring-buffer-size buf) (car (array-dimensions buffer)))))
-
-(defun ring-buffer-empty? (buf)
-  (with-slots (read write) buf
-    (= read write)))
-
-(defun ring-buffer-free (buf)
-  (with-slots (buffer) buf
-    (- (car (array-dimensions buffer))
-       (ring-buffer-size buf))))
-
-(defun advance (buf n)
-  (with-slots (write buffer) buf
-    (incf write n)))
-
-(defun consume (buf n)
-  (with-slots (read buffer) buf
-    (incf read n)))
-
-(defvar *connections*)
 (defvar *requests*)
 (defvar *listen-socket*)
 (defvar *stop* nil)
@@ -78,56 +33,19 @@
 
 (defun accept-new-http-connection (ctx event)
   (declare (ignore event))
-  (format t "new connection handler~%")
   (with-slots ((listen-socket reactor.dispatch::socket)) ctx
     (loop
        do
 	 (handler-case
 	     (let ((new-socket (accept listen-socket)))
 	       (set-non-blocking new-socket)
-	       (setf (gethash new-socket *connections*) (make-http-connection))
+	       (setf (gethash new-socket *connections*) (make-http-connection new-socket))
 	       (on-read new-socket #'http-rx-handler))
-	   (socket-error (err)
+	   (operation-interrupted ()
+	     (format t "accept() got interrupted. retrying...~%"))
+	   (operation-would-block (err)
 	     (format t "done accepting~%")
 	     (loop-finish))))))
-
-(defun make-displaced-buffer (buf pos len &optional (type '(unsigned-byte 8)))
-  (make-array len
-	      :element-type type
-	      :displaced-to buf
-	      :displaced-index-offset pos))
-
-(defun displaced-receive (socket buf pos len)
-  (let ((buf (make-displaced-buffer buf pos len)))
-    (let ((rxlen (receive socket buf)))
-      (format t "received ~a bytes~%" rxlen)
-      rxlen)))
-
-(defun split-receive (socket http-conn bytes-to-read)
-  (let ((rxring (slot-value http-conn 'rxbuf)))
-    (with-slots (buffer read write capacity) rxring
-      (unless (ring-buffer-full? rxring)
-	(let* ((free-space (ring-buffer-free rxring))
-	       (read-size (min free-space bytes-to-read)))
-	  (if (<= (mask (+ write read-size)) (mask write))
-	      ;; case 1:
-	      ;; [.....xxxxxx........]
-	      ;;       ^     ^
-	      ;;     read   write
-	      (let ((readlen1 (displaced-receive socket buffer (mask write) (- capacity (mask write)))))
-		(advance rxring readlen1)
-		(if (> (- bytes-to-read readlen1) 0)
-		    (let ((readlen2 (displaced-receive socket buffer 0 (mask read))))
-		      (advance rxring readlen2)
-		      (+ readlen1 readlen2))
-		    readlen1))
-	      ;; case 1:
-	      ;; [xxxxx........xxxxxx]
-	      ;;       ^       ^
-	      ;;     write    read
-	      (let ((readlen (displaced-receive socket buffer (mask write) read-size)))
-		(advance rxring readlen)
-		readlen)))))))
 
 (defun http-tx-handler (ctx event)
   (with-slots ((socket reactor.dispatch::socket)) ctx
@@ -137,11 +55,10 @@
 	(let* ((elem (queue-peek txq))
 	       (xfered (cdr (assoc :xfered elem)))
 	       (size (cdr (assoc :size elem)))
-	       (resp (cdr (assoc :data elem)))
-	       (dispbuf (make-displaced-buffer resp xfered (- size xfered) 'character)))
+	       (resp (cdr (assoc :data elem))))
 	  (format t "xfered=~a~%" xfered)
 	  (format t "size=~a~%" size)
-	  (let ((nsent (send-response socket dispbuf)))
+	  (let ((nsent (send-response socket resp xfered (- size xfered))))
 	    (format t "sent ~a of ~a bytes~%" nsent size)
 	    (incf (cdr (assoc :xfered elem)) nsent)
 	    (when (= (cdr (assoc :xfered elem)) size)
@@ -152,60 +69,83 @@
 		;;(del-write socket)
 		(rem-socket socket)
 		(remhash socket *connections*)
-		(disconnect socket)
+		;;(disconnect socket)
+		(release-http-connection conn)
 		))))))))
 
+(defun split-receive (conn)
+  (with-slots (socket rxbuf rxcap rd wr) conn
+    (labels ((mask (x) (logand x (1- rxcap))))
+      (let* ((size (- wr rd))
+	     (nfree (- rxcap size))
+	     (end (+ wr nfree)))
+	(cond
+	  ((< (mask end) (mask rd))
+	   (let ((ptrs (list (sap+ (alien-sap rxbuf) (mask wr))
+			     (alien-sap rxbuf)))
+		 (lens (list (- rxcap (mask wr)) rd)))
+	     (incf wr (receive socket ptrs lens))))
+
+	  ((= (mask end) (mask rd))
+	   (let ((ptr (sap+ (alien-sap rxbuf) (mask wr))))
+	     (incf wr (receive socket (list ptr) (list nfree)))))
+
+	  (t
+	   (let ((ptr (sap+ (alien-sap rxbuf) (mask wr))))
+	     (incf wr (receive socket (list ptr) (list nfree))))))))))
+
+(defun try-receive (conn)
+  (with-slots (rxbuf rxcap rd wr) conn
+    (let* ((size (- wr rd))
+	   (full? (= size rxcap)))
+      (if full?
+	  (error 'rx-buffer-full)
+	  (let ((nread (split-receive conn)))
+	    (format t "nread=~a~%" nread))))))
+
 (defun http-rx-handler (ctx event)
+  (format t "RX handler called with event '~a'~%" event)
   (with-slots ((socket reactor.dispatch::socket)) ctx
-    (format t "RX handler called with event '~a'~%" event)
-    (let ((rxbytes (max 4096 (min 4096 (getf event :bytes-in))))
-	  (conn (gethash socket *connections*)))
-      (with-slots (rxbuf lines complete) conn
-	(unless (ring-buffer-full? rxbuf)
-	  (when (> rxbytes 0)
-	    (progn
-	      (split-receive socket conn rxbytes)
-	      (if (try-parse conn)
-		  (let* ((reqlines (nreverse lines))
-			 (resp (process-request (parse-request reqlines)))
-			 (txbuf (format-response resp)))
+    (let ((conn (gethash socket *connections*)))
+      (try-receive conn)
+      (multiple-value-bind (complete? lines) (try-parse conn)
+	(format t "all lines=~a~%" lines)
+	(when complete?
+	  (let* ((resp (process-request (parse-request lines)))
+		 (txbuf (format-response resp)))
+	    (enqueue (list
+		      (cons :xfered 0)
+		      (cons :size (length txbuf))
+		      (cons :data txbuf))
+		     (slot-value conn 'txq))
 
-		    ;; append response to the send queue
-		      (enqueue (list
-				(cons :xfered 0)
-				(cons :size (length txbuf))
-				(cons :data txbuf))
-			       (slot-value conn 'txq))
-
-		      ;; enable on-write events
-		      (on-write socket #'http-tx-handler)
-		      (setf lines '() complete nil))))))))))
+	    (on-write socket #'http-tx-handler)))))))
 
 (defun buf-char (buf pos)
-  (code-char (aref buf pos)))
+  (code-char (deref buf pos)))
 
 (defun ring-buffer-read-sequence (buf start end)
-  (map 'string #'code-char
+  (map 'string #'identity
        (loop for i from start below end
-	  collect (aref buf (mask i)))))
+	  collect (buf-char buf (logand i 4095)))))
 
-(defun try-parse (req)
-  (with-slots (rxbuf rxpos lines complete) req
-    (with-slots (buffer read write capacity) rxbuf
-      (loop for i = rxpos then (1+ i)
-	 until (= i write)
-	 when (and (char= (buf-char buffer (mask i)) #\newline)
-		   (char= (buf-char buffer (mask (1- i))) #\return))
-	 do
-	   (let ((line (ring-buffer-read-sequence buffer read (1- i))))
-	     (consume rxbuf (+ 2 (length line)))
-	     (setf complete (zerop (length line)))
-	     (if complete
-		 (loop-finish)
-		 (push line lines)))
-	 finally
-	   (setf rxpos (1+ i))
-	   (return complete)))))
+(defun try-parse (conn)
+  (with-slots (socket rd wr rxcap rxbuf lines) conn
+    (format t "rd=~a, wr=~a~%" rd wr)
+    (loop for i = rd then (1+ i) until (= i wr)
+       with complete = nil
+       when (and (char= (buf-char rxbuf (logand i (1- rxcap))) #\newline)
+		 (char= (buf-char rxbuf (logand (1- i) (1- rxcap))) #\return))
+       do
+	 (let ((line (ring-buffer-read-sequence rxbuf rd (1- i))))
+	   (incf rd (+ 2 (length line)))
+	   (when (zerop (length line))
+	     (setf complete t)
+	     (loop-finish))
+	   (push line lines))
+       finally
+	 (setf rd (1+ i))
+	 (return (values complete (if complete (nreverse lines) '()))))))
 
 (defun status-line (proto code reason)
   (with-output-to-string (out)
@@ -230,5 +170,12 @@
     (princ (format-header resp) out)
     (princ (third resp) out)))
 
-(defun send-response (socket resp)
-  (send socket resp))
+(defun send-response (socket resp pos len)
+  (let ((buf (make-alien (signed 8) len)))
+    (loop for i from 0 below len
+       do
+	 (setf (deref buf i)
+	       (char-code (aref resp (+ pos i)))))
+    (let ((nsent (send socket (alien-sap buf) len)))
+      (free-alien buf)
+      nsent)))
