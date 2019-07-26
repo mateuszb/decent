@@ -47,6 +47,8 @@
     (cons path params)))
 
 (defun parse-request-line (line)
+  #+debug
+  (format t "parsing request line '~a'~%" line)
   (with-input-from-string (in line)
     (let ((method (read-method (consume-token in)))
 	  (uri (parse-uri-path (consume-token in)))
@@ -73,7 +75,8 @@
 	    with hdrs = (make-hash-table :test 'equal :synchronized t)
 	    do
 	      (multiple-value-bind (key val) (parse-header-line hdrline)
-		;(format t "~a: ~a~%" key val)
+		#+debug
+		(format t "~a: ~a~%" key val)
 		(setf (gethash key hdrs) val))
 	    finally (return hdrs))))
     (make-http-request :method (first req)

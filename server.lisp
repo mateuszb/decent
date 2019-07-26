@@ -19,7 +19,6 @@
 	(loop until *stop*
 	   do
 	     (let ((events (wait-for-events)))
-	       (format t "events=~a~%" events)
 	       (dispatch-events events)))
 
 	(loop for sock being the hash-key in *connections*
@@ -49,7 +48,6 @@
 
 (defun http-tx-handler (ctx event)
   (with-slots ((socket reactor.dispatch::socket)) ctx
-    (format t "TX handler called with event '~a'~%" event)
     (let ((conn (gethash socket *connections*)))
       (with-slots (txq) conn
 	(let* ((elem (queue-peek txq))
@@ -63,15 +61,9 @@
 	    (incf (cdr (assoc :xfered elem)) nsent)
 	    (when (= (cdr (assoc :xfered elem)) size)
 	      (dequeue txq)
-	      (setf (gethash socket *connections*) conn)
+	      ;(setf (gethash socket *connections*) conn)
 	      (when (queue-empty-p txq)
-		(format t "tx queue is empty. disabling :out filter notification on this socket~%")
-		;;(del-write socket)
-		(rem-socket socket)
-		(remhash socket *connections*)
-		;;(disconnect socket)
-		(release-http-connection conn)
-		))))))))
+		(del-write socket)))))))))
 
 (defun split-receive (conn)
   (with-slots (socket rxbuf rxcap rd wr) conn
@@ -100,26 +92,35 @@
 	   (full? (= size rxcap)))
       (if full?
 	  (error 'rx-buffer-full)
-	  (let ((nread (split-receive conn)))
-	    (format t "nread=~a~%" nread))))))
+	  (let ((nread 0))
+	    (handler-case (setf nread (split-receive conn))
+	      (operation-would-block ()
+		(format t "operation would block. will re-try later...~%"))))))))
 
 (defun http-rx-handler (ctx event)
-  (format t "RX handler called with event '~a'~%" event)
   (with-slots ((socket reactor.dispatch::socket)) ctx
-    (let ((conn (gethash socket *connections*)))
-      (try-receive conn)
-      (multiple-value-bind (complete? lines) (try-parse conn)
-	(format t "all lines=~a~%" lines)
-	(when complete?
-	  (let* ((resp (process-request (parse-request lines)))
-		 (txbuf (format-response resp)))
-	    (enqueue (list
-		      (cons :xfered 0)
-		      (cons :size (length txbuf))
-		      (cons :data txbuf))
-		     (slot-value conn 'txq))
+    (handler-case
+	(let ((conn (gethash socket *connections*)))
+	  (try-receive conn)
+	  (multiple-value-bind (complete? lines) (try-parse conn)
+	    (format t "all lines=~a~%" lines)
+	    (when complete?
+	      (let* ((resp (process-request (parse-request lines)))
+		     (txbuf (format-response resp)))
+		(setf (slot-value conn 'lines) nil)
+		(enqueue (list
+			  (cons :xfered 0)
+			  (cons :size (length txbuf))
+			  (cons :data txbuf))
+			 (slot-value conn 'txq))
 
-	    (on-write socket #'http-tx-handler)))))))
+		(on-write socket #'http-tx-handler)))))
+      (socket-eof ()
+	(let ((conn (gethash socket *connections*)))
+	  (with-slots (socket) conn
+	    (rem-socket socket)
+	    (remhash socket *connections*)
+	    (release-http-connection conn)))))))
 
 (defun buf-char (buf pos)
   (code-char (deref buf pos)))
@@ -131,7 +132,6 @@
 
 (defun try-parse (conn)
   (with-slots (socket rd wr rxcap rxbuf lines) conn
-    (format t "rd=~a, wr=~a~%" rd wr)
     (loop for i = rd then (1+ i) until (= i wr)
        with complete = nil
        when (and (char= (buf-char rxbuf (logand i (1- rxcap))) #\newline)
@@ -144,7 +144,9 @@
 	     (loop-finish))
 	   (push line lines))
        finally
-	 (setf rd (1+ i))
+	 (if lines
+	     (setf rd (1+ i))
+	     (setf rd i))
 	 (return (values complete (if complete (nreverse lines) '()))))))
 
 (defun status-line (proto code reason)
@@ -159,7 +161,7 @@
 (defun format-header (resp)
   (destructuring-bind (code hdrs body) resp
     (with-output-to-string (out)
-      (format out (status-line "HTTP/1.1" code "OK"))
+      (format out (status-line "HTTP/1.1" code (if (= code 200) "OK" "NOT FOUND")))
       (loop for (hdr . val) in hdrs
 	 do
 	   (format out "~a: ~a~a~a" hdr val #\return #\newline))
@@ -174,8 +176,7 @@
   (let ((buf (make-alien (signed 8) len)))
     (loop for i from 0 below len
        do
-	 (setf (deref buf i)
-	       (char-code (aref resp (+ pos i)))))
+	 (setf (deref buf i) (char-code (aref resp (+ pos i)))))
     (let ((nsent (send socket (alien-sap buf) len)))
       (free-alien buf)
       nsent)))

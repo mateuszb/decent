@@ -16,17 +16,19 @@
 (defun process-request (req)
   (with-slots (method uri) req
     (multiple-value-bind (route existsp) (gethash uri *routes*)
+      (format t "route='~a' exists=~a~%" route existsp)
       (if existsp
 	  ;; call route
 	  (funcall route req)
 	  ;; else, 404
-	  (list 404
-		(list
-		 (cons "Host" "localhost")
-		 (cons "Content-Length" 10)
-		 (cons "Content-Type" "text/plain")
-		 (cons "Connection" "close"))
-		"NOT FOUND")))))
+	  '(404
+	    (("Host". "hackingrun.com")
+	     ("Content-Length" . 11)
+	     ("Content-Type" . "text/plain")
+	     ("Connection" . "close")
+	     )
+	    "NOT FOUND
+")))))
 
 ;; example routes
 (defun read-posts ()
@@ -46,8 +48,9 @@
 					 (:p (getf (cdr post) :text)))))))))
 	  (list 200
 		(list
-		 (cons "Host" "localhost")
+		 (cons "Host" "hackingrun.com")
 		 (cons "Content-Length" (length doc))
 		 (cons "Content-Type" "text/html")
-		 (cons "Connection" "close"))
+		 ;(cons "Connection" "close")
+		 )
 		doc))))
