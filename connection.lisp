@@ -14,7 +14,7 @@
 
 (defun make-http-connection (socket)
   (make-instance 'http-connection
-		 :rxbuf (make-alien (signed 8) +RX-BUFFER-CAPACITY+)
+		 :rxbuf (make-alien (unsigned 8) +RX-BUFFER-CAPACITY+)
 		 :rxcap +RX-BUFFER-CAPACITY+
 		 :socket socket))
 

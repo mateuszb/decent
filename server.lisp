@@ -129,7 +129,7 @@
 	    (release-http-connection conn)))))))
 
 (defun buf-char (buf pos)
-  (code-char (deref buf pos)))
+  (code-char (deposit-field (deref buf pos) (byte 8 0) 0)))
 
 (defun ring-buffer-read-sequence (buf start end)
   (map 'string #'identity
@@ -179,7 +179,7 @@
     (princ (third resp) out)))
 
 (defun send-response (socket resp pos len)
-  (let ((buf (make-alien (signed 8) len)))
+  (let ((buf (make-alien (unsigned 8) len)))
     (loop for i from 0 below len
        do
 	 (setf (deref buf i) (char-code (aref resp (+ pos i)))))
