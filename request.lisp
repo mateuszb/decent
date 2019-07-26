@@ -43,9 +43,9 @@
 		      (:body (:h1 "Hacking Run")
 			     (loop for post in (read-posts)
 				collect (:div
-					 (:h3 (getf (cdr post) :title))
-					 (:h4 (getf (cdr post) :date))
-					 (:p (getf (cdr post) :text)))))))))
+					 (:h3 (eval `(with-html ,(getf post :title))))
+					 (:h4 (eval `(with-html ,(getf post :date))))
+					 (:p (eval `(with-html ,(getf post :text)))))))))))
 	  (list 200
 		(list
 		 (cons "Host" "hackingrun.com")
