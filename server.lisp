@@ -115,6 +115,12 @@
 			 (slot-value conn 'txq))
 
 		(on-write socket #'http-tx-handler)))))
+      (socket-read-error ()
+	(let ((conn (gethash socket *connections*)))
+	  (with-slots (socket) conn
+	    (rem-socket socket)
+	    (remhash socket *connections*)
+	    (release-http-connection conn))))
       (socket-eof ()
 	(let ((conn (gethash socket *connections*)))
 	  (with-slots (socket) conn
