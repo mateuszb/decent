@@ -65,26 +65,25 @@
 	      (when (queue-empty-p txq)
 		(del-write socket)))))))))
 
+(defun wraps-around? (start len cap)
+  (>= (+ start len) cap))
+
 (defun split-receive (conn)
   (with-slots (socket rxbuf rxcap rd wr) conn
     (labels ((mask (x) (logand x (1- rxcap))))
       (let* ((size (- wr rd))
 	     (nfree (- rxcap size))
 	     (end (+ wr nfree)))
-	(cond
-	  ((< (mask end) (mask rd))
-	   (let ((ptrs (list (sap+ (alien-sap rxbuf) (mask wr))
-			     (alien-sap rxbuf)))
-		 (lens (list (- rxcap (mask wr)) rd)))
-	     (incf wr (receive socket ptrs lens))))
-
-	  ((= (mask end) (mask rd))
-	   (let ((ptr (sap+ (alien-sap rxbuf) (mask wr))))
-	     (incf wr (receive socket (list ptr) (list nfree)))))
-
-	  (t
-	   (let ((ptr (sap+ (alien-sap rxbuf) (mask wr))))
-	     (incf wr (receive socket (list ptr) (list nfree))))))))))
+	(if (wraps-around? (mask wr) nfree rxcap)
+	    (let ((ptrs (list (sap+ (alien-sap rxbuf) (mask wr))
+			      (alien-sap rxbuf)))
+		  (lens (list (- rxcap (mask wr)) (mask rd))))
+	      (format t "#1a. receive into pos ~a of ~a bytes~%" (mask wr) (- rxcap (mask wr)))
+	      (format t "#1b. receive into pos ~a of ~a bytes~%" 0 (mask rd))
+	      (incf wr (receive socket ptrs lens)))
+	    (let ((ptr (sap+ (alien-sap rxbuf) (mask wr))))
+	      (format t "#3. single receive into pos ~a of ~a bytes~%" (mask wr) nfree)
+	      (incf wr (receive socket (list ptr) (list nfree)))))))))
 
 (defun try-receive (conn)
   (with-slots (rxbuf rxcap rd wr) conn
@@ -174,15 +173,35 @@
       (format out "~a~a" #\return #\newline))))
 
 (defun format-response (resp)
-  (with-output-to-string (out)
-    (princ (format-header resp) out)
-    (princ (third resp) out)))
+  (let* ((hdr (format-header resp))
+	 (hdrlen (length hdr))
+	 (msg (third resp))
+	 (msglen (length msg))
+	 (len (+ msglen hdrlen))
+	 (bytes (make-array len :element-type '(unsigned-byte 8))))
+    (loop for c across hdr
+       for i from 0 below (length hdr)
+       do (setf (aref bytes i) (char-code (aref hdr i))))
+    (loop for b across msg
+       for i from 0 below msglen
+       for j from hdrlen below len
+       do
+	 (assert (< j len))
+	 (setf (aref bytes j)
+		(typecase (aref msg i)
+		  (character (char-code (aref msg i)))
+		  (t (aref msg i)))))
+    bytes))
 
 (defun send-response (socket resp pos len)
+  (when (zerop len)
+    (error "zero length response size?"))
   (let ((buf (make-alien (unsigned 8) len)))
+    (format t "allocated ~a bytes of alien buf ~a~%" len (alien-sap buf))
     (loop for i from 0 below len
        do
-	 (setf (deref buf i) (char-code (aref resp (+ pos i)))))
+	 (setf (deref buf i) (aref resp (+ pos i))))
     (let ((nsent (send socket (alien-sap buf) len)))
+      (format t "freeing ~a bytes of alien buf ~a~%" len (alien-sap buf))
       (free-alien buf)
       nsent)))

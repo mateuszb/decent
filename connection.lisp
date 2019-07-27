@@ -21,4 +21,5 @@
 (defun release-http-connection (conn)
   (with-slots (rxbuf socket) conn
     (disconnect socket)
+    (format t "freeing ~a bytes of alien buf ~a~%" +RX-BUFFER-CAPACITY+ (alien-sap rxbuf))
     (sb-alien:free-alien rxbuf)))
