@@ -14,8 +14,21 @@
   (headers (make-hash-table :test 'string= :synchronized t)))
 
 (defun process-request (req)
-  (with-slots (method uri) req
+  (with-slots (method uri headers) req
     (multiple-value-bind (route existsp) (gethash uri *routes*)
+      ;(format t "~a,~a,~a~%" (get-universal-time) method uri )
+      (with-open-file (log "~/access.log" :direction :output :if-exists :append
+			   :if-does-not-exist :create)
+	(princ
+	 (list (cons :time (get-universal-time))
+	       (cons :method method)
+	       (cons
+		(cons :uri uri)
+		(loop for key being the hash-key in headers using (hash-value val)
+		   collect (cons key val))))
+	 log)
+	(terpri log))
+
       (format t "route='~a' exists=~a~%" route existsp)
       (if existsp
 	  ;; call route

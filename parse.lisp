@@ -1,5 +1,8 @@
 (in-package :decent)
 
+(define-condition protocol-error ()
+  ((protocol :initform nil :initarg :protocol)))
+
 (defun is-separator? (c sep)
   (char= c sep))
 
@@ -47,20 +50,21 @@
     (cons path params)))
 
 (defun parse-request-line (line)
-  #+debug
-  (format t "parsing request line '~a'~%" line)
   (with-input-from-string (in line)
     (let ((method (read-method (consume-token in)))
 	  (uri (parse-uri-path (consume-token in)))
-	  (proto (read-proto (consume-token in))))
+	  (proto (read-proto (string-upcase (consume-token in)))))
+      (unless (eq proto :http1.1)
+	  (error (make-condition 'protocol-error :protocol proto)))
       (values method uri proto))))
 
 (defun read-header-name (tok)
   (subseq tok 0 (length tok)))
 
 (defun read-header-value (in)
-  (let ((line (read-line in)))
-    (string-trim '(#\space) line)))
+  (let ((line (read-line in nil nil)))
+    (when line
+      (string-trim '(#\space) line))))
 
 (defun parse-header-line (line)
   (with-input-from-string (in line)

@@ -103,7 +103,11 @@
 	  (try-receive conn)
 	  (multiple-value-bind (complete? lines) (try-parse conn)
 	    (format t "all lines=~a~%" lines)
-	    (when complete?
+	    (when (and lines (not complete?))
+	      (format t "request parsing problem? ~a~%"
+		      (with-slots (rxbuf) conn
+			(loop for i from 0 below 4096 do (buf-char rxbuf i)))))
+	    (when (and complete? lines)
 	      (let* ((resp (process-request (parse-request lines)))
 		     (txbuf (format-response resp)))
 		(setf (slot-value conn 'lines) nil)
@@ -114,6 +118,15 @@
 			 (slot-value conn 'txq))
 
 		(on-write socket #'http-tx-handler)))))
+      (protocol-error (err)
+	(format t "protocol error ~a~%" err)
+	;; someone sent us a wrong protocol version we don't support.
+	;; close the socket. don't bother sending any responses out.
+	(let ((conn (gethash socket *connections*)))
+	  (with-slots (socket) conn
+	    (rem-socket socket)
+	    (remhash socket *connections*)
+	    (release-http-connection conn))))
       (socket-read-error ()
 	(let ((conn (gethash socket *connections*)))
 	  (with-slots (socket) conn
