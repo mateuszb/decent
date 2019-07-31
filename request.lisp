@@ -7,6 +7,7 @@
    (method :type 'keyword)))
 
 (defstruct http-request
+  (peer nil)
   (method nil)
   (uri nil)
   (params nil)
@@ -14,14 +15,18 @@
   (headers (make-hash-table :test 'string= :synchronized t)))
 
 (defun process-request (req)
-  (with-slots (method uri headers) req
+  (with-slots (peer method uri headers) req
     (multiple-value-bind (route existsp) (gethash uri *routes*)
       ;(format t "~a,~a,~a~%" (get-universal-time) method uri )
       (with-open-file (log "~/access.log" :direction :output :if-exists :append
 			   :if-does-not-exist :create)
-	(princ
+	(prin1
 	 (list (cons :time (get-universal-time))
 	       (cons :method method)
+	       (cons :peer (format nil "~a.~a.~a.~a" (nth 0 peer)
+				   (nth 1 peer)
+				   (nth 2 peer)
+				   (nth 3 peer)))
 	       (cons
 		(cons :uri uri)
 		(loop for key being the hash-key in headers using (hash-value val)

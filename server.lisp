@@ -2,7 +2,6 @@
 
 (defparameter +BUFFER-SIZE+ 4096)
 
-
 (defvar *requests*)
 (defvar *listen-socket*)
 (defvar *stop* nil)
@@ -96,10 +95,12 @@
 	      (operation-would-block ()
 		(format t "operation would block. will re-try later...~%"))))))))
 
+
 (defun http-rx-handler (ctx event)
   (with-slots ((socket reactor.dispatch::socket)) ctx
     (handler-case
-	(let ((conn (gethash socket *connections*)))
+	(let ((conn (gethash socket *connections*))
+	      (peer (get-peer-name (socket-fd socket))))
 	  (try-receive conn)
 	  (multiple-value-bind (complete? lines) (try-parse conn)
 	    (format t "all lines=~a~%" lines)
@@ -108,7 +109,7 @@
 		      (with-slots (rxbuf) conn
 			(loop for i from 0 below 4096 do (buf-char rxbuf i)))))
 	    (when (and complete? lines)
-	      (let* ((resp (process-request (parse-request lines)))
+	      (let* ((resp (process-request (parse-request peer lines)))
 		     (txbuf (format-response resp)))
 		(setf (slot-value conn 'lines) nil)
 		(enqueue (list

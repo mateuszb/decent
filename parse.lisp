@@ -72,7 +72,7 @@
 	  (val (read-header-value in)))
       (values key val))))
 
-(defun parse-request (lines)
+(defun parse-request (peer lines)
   (let ((req (multiple-value-list (parse-request-line (car lines))))
 	(hdrs
 	 (loop for hdrline in (cdr lines)
@@ -83,8 +83,10 @@
 		(format t "~a: ~a~%" key val)
 		(setf (gethash key hdrs) val))
 	    finally (return hdrs))))
-    (make-http-request :method (first req)
-		       :uri (car (second req))
-		       :params (cdr (second req))
-		       :proto (third req)
-		       :headers hdrs)))
+    (make-http-request
+     :peer peer
+     :method (first req)
+     :uri (car (second req))
+     :params (cdr (second req))
+     :proto (third req)
+     :headers hdrs)))
