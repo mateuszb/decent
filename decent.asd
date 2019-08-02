@@ -6,7 +6,6 @@
 	       "reactor"
 	       "string-case"
 	       "cl-speedy-queue"
-	       "spinneret"
 	       "socket")
   :components ((:file "packages")
 	       (:file "request" :depends-on ("packages"))

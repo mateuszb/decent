@@ -5,6 +5,9 @@
 	:reactor.dispatch
 	:string-case
 	:cl-speedy-queue
-	:spinneret
 	:sb-sys
-	:sb-alien))
+	:sb-alien)
+  (:export
+   :start
+   :defroute
+   ))
