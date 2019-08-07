@@ -38,11 +38,12 @@
 	     (let ((new-socket (accept listen-socket)))
 	       (set-non-blocking new-socket)
 	       (setf (gethash new-socket *connections*) (make-http-connection new-socket))
-	       (on-read new-socket #'http-rx-handler))
+	       (on-read new-socket #'http-rx-handler)
+	       (on-disconnect new-socket #'http-disconnect-handler))
 	   (operation-interrupted ()
 	     (format t "accept() got interrupted. retrying...~%"))
-	   (operation-would-block (err)
-	     (format t "done accepting~%")
+	   (operation-would-block ()
+	     ;(format t "done accepting~%")
 	     (loop-finish))))))
 
 (defun http-tx-handler (ctx event)
@@ -52,17 +53,35 @@
 	(let* ((elem (queue-peek txq))
 	       (xfered (cdr (assoc :xfered elem)))
 	       (size (cdr (assoc :size elem)))
-	       (resp (cdr (assoc :data elem))))
-	  (format t "xfered=~a~%" xfered)
-	  (format t "size=~a~%" size)
+	       (resp (cdr (assoc :data elem)))
+	       (req (cdr (assoc :request elem)))
+	       (hdrs (http-request-headers req)))
+	  #+debug (format t "xfered=~a~%" xfered)
+	  #+debug (format t "size=~a~%" size)
+	  #+debug
+	  (format t "~a~%"
+		  (loop for key being the hash-key in hdrs
+		     using (hash-value val)
+		     collect (cons key val)))
 	  (let ((nsent (send-response socket resp xfered (- size xfered))))
-	    (format t "sent ~a of ~a bytes~%" nsent size)
 	    (incf (cdr (assoc :xfered elem)) nsent)
 	    (when (= (cdr (assoc :xfered elem)) size)
 	      (dequeue txq)
-	      ;(setf (gethash socket *connections*) conn)
 	      (when (queue-empty-p txq)
-		(del-write socket)))))))))
+		(del-write socket))
+	      (when (string= (string-downcase (gethash "Connection" hdrs)) "close")
+		(rem-socket socket)
+		(remhash socket *connections*)
+		(release-http-connection conn)))))))))
+
+(defun http-disconnect-handler (ctx event)
+  (with-slots ((socket reactor.dispatch::socket)) ctx
+    (let ((conn (gethash socket *connections*)))
+      (when conn
+	(with-slots (socket) conn
+	  (rem-socket socket)
+	  (remhash socket *connections*)
+	  (release-http-connection conn))))))
 
 (defun wraps-around? (start len cap)
   (>= (+ start len) cap))
@@ -77,10 +96,13 @@
 	    (let ((ptrs (list (sap+ (alien-sap rxbuf) (mask wr))
 			      (alien-sap rxbuf)))
 		  (lens (list (- rxcap (mask wr)) (mask rd))))
+	      #+debug
 	      (format t "#1a. receive into pos ~a of ~a bytes~%" (mask wr) (- rxcap (mask wr)))
+	      #+debug
 	      (format t "#1b. receive into pos ~a of ~a bytes~%" 0 (mask rd))
 	      (incf wr (receive socket ptrs lens)))
 	    (let ((ptr (sap+ (alien-sap rxbuf) (mask wr))))
+	      #+debug
 	      (format t "#3. single receive into pos ~a of ~a bytes~%" (mask wr) nfree)
 	      (incf wr (receive socket (list ptr) (list nfree)))))))))
 
@@ -90,37 +112,41 @@
 	   (full? (= size rxcap)))
       (if full?
 	  (error 'rx-buffer-full)
-	  (let ((nread 0))
-	    (handler-case (setf nread (split-receive conn))
-	      (operation-would-block ()
-		(format t "operation would block. will re-try later...~%"))))))))
-
+	  (let ((rxbytes (split-receive conn)))
+	    #+debug
+	    (format t "read ~a bytes~%" rxbytes)
+	    rxbytes)))))
 
 (defun http-rx-handler (ctx event)
   (with-slots ((socket reactor.dispatch::socket)) ctx
     (handler-case
-	(let ((conn (gethash socket *connections*))
-	      (peer (get-peer-name (socket-fd socket))))
-	  (try-receive conn)
-	  (multiple-value-bind (complete? lines) (try-parse conn)
-	    (format t "all lines=~a~%" lines)
-	    (when (and lines (not complete?))
-	      (format t "request parsing problem? ~a~%"
-		      (with-slots (rxbuf) conn
-			(loop for i from 0 below 4096 do (buf-char rxbuf i)))))
-	    (when (and complete? lines)
-	      (let* ((resp (process-request (parse-request peer lines)))
-		     (txbuf (format-response resp)))
-		(setf (slot-value conn 'lines) nil)
-		(enqueue (list
-			  (cons :xfered 0)
-			  (cons :size (length txbuf))
-			  (cons :data txbuf))
-			 (slot-value conn 'txq))
+	(let* ((conn (gethash socket *connections*))
+	       (peer (get-peer-name (socket-fd socket)))
+	       (rd (slot-value conn 'rd))
+	       (wr (slot-value conn 'wr)))
+	  (loop
+	     do
+	       (try-receive conn)
+	       (multiple-value-bind (complete? lines) (try-parse conn)
+		 (when (and lines (not complete?))
+		   (error "request parsing problem?~%"))
+		 (when (and complete? lines)
+		   (let* ((req (parse-request peer lines))
+			  (resp (process-request req))
+			  (txbuf (format-response resp)))
+		     (setf (slot-value conn 'lines) nil)
+		     (enqueue (list
+			       (cons :xfered 0)
+			       (cons :size (length txbuf))
+			       (cons :data txbuf)
+			       (cons :request req))
+			      (slot-value conn 'txq))
 
-		(on-write socket #'http-tx-handler)))))
+		     (on-write socket #'http-tx-handler))))))
+      (operation-would-block ()
+	#+debug (format t "operation would block. will re-try later...~%")
+	t)
       (protocol-error (err)
-	(format t "protocol error ~a~%" err)
 	;; someone sent us a wrong protocol version we don't support.
 	;; close the socket. don't bother sending any responses out.
 	(let ((conn (gethash socket *connections*)))
@@ -145,27 +171,28 @@
   (code-char (deposit-field (deref buf pos) (byte 8 0) 0)))
 
 (defun ring-buffer-read-sequence (buf start end)
+  ;(format t "reading buffer from ~a to ~a~%" start end)
   (map 'string #'identity
        (loop for i from start below end
 	  collect (buf-char buf (logand i 4095)))))
 
 (defun try-parse (conn)
-  (with-slots (socket rd wr rxcap rxbuf lines) conn
-    (loop for i = rd then (1+ i) until (= i wr)
+  (with-slots (socket rd rdsofar wr rxcap rxbuf lines) conn
+    (loop for i = rdsofar then (1+ i) until (= i wr)
        with complete = nil
+       do
+	 (setf rdsofar i)
        when (and (char= (buf-char rxbuf (logand i (1- rxcap))) #\newline)
 		 (char= (buf-char rxbuf (logand (1- i) (1- rxcap))) #\return))
        do
 	 (let ((line (ring-buffer-read-sequence rxbuf rd (1- i))))
-	   (incf rd (+ 2 (length line)))
+	   (setf rd (1+ i)
+		 rdsofar (1+ i))
 	   (when (zerop (length line))
 	     (setf complete t)
 	     (loop-finish))
 	   (push line lines))
        finally
-	 (if lines
-	     (setf rd (1+ i))
-	     (setf rd i))
 	 (return (values complete (if complete (nreverse lines) '()))))))
 
 (defun status-line (proto code reason)
@@ -211,11 +238,11 @@
   (when (zerop len)
     (error "zero length response size?"))
   (let ((buf (make-alien (unsigned 8) len)))
-    (format t "allocated ~a bytes of alien buf ~a~%" len (alien-sap buf))
+    ;(format t "allocated ~a bytes of alien buf ~a~%" len (alien-sap buf))
     (loop for i from 0 below len
        do
 	 (setf (deref buf i) (aref resp (+ pos i))))
     (let ((nsent (send socket (alien-sap buf) len)))
-      (format t "freeing ~a bytes of alien buf ~a~%" len (alien-sap buf))
+      ;(format t "freeing ~a bytes of alien buf ~a~%" len (alien-sap buf))
       (free-alien buf)
       nsent)))

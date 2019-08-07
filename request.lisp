@@ -34,7 +34,7 @@
 	 log)
 	(terpri log))
 
-      (format t "route='~a' exists=~a~%" route existsp)
+      #+debug (format t "route='~a' exists=~a~%" route existsp)
       (if existsp
 	  ;; call route
 	  (funcall route req)

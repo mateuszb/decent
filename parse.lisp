@@ -54,7 +54,7 @@
     (let ((method (read-method (consume-token in)))
 	  (uri (parse-uri-path (consume-token in)))
 	  (proto (read-proto (string-upcase (consume-token in)))))
-      (unless (eq proto :http1.1)
+      (unless (member proto '(:http1.1 :http1.0))
 	  (error (make-condition 'protocol-error :protocol proto)))
       (values method uri proto))))
 
