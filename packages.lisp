@@ -9,5 +9,4 @@
 	:sb-alien)
   (:export
    :start
-   :defroute
-   ))
+   :defroute))

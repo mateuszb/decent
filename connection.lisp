@@ -13,15 +13,35 @@
    (lines :initform '())
    (txq :initform (make-queue 16))))
 
+(defclass https-connection ()
+  ((socket :reader socket :initform nil :initarg :socket)
+   (lines :initform '())
+   (txq :initform (make-queue 16))
+   (ssl-context :initform nil :initarg :ssl-context :reader https-tls-context)
+   (ssl-stream :initform nil :initarg :ssl-stream :reader https-tls-stream)))
+
 (defun make-http-connection (socket)
   (make-instance 'http-connection
 		 :rxbuf (make-alien (unsigned 8) +RX-BUFFER-CAPACITY+)
 		 :rxcap +RX-BUFFER-CAPACITY+
 		 :socket socket))
 
-(defun release-http-connection (conn)
+(defun make-https-connection (socket)
+  (make-instance 'https-connection :socket socket))
+
+(defgeneric release-connection (conn)
+  (:documentation "Releases resources in a connection."))
+
+(defmethod release-connection ((conn http-connection))
   (with-slots (rxbuf socket) conn
     (disconnect socket)
-    #+debug
-    (format t "freeing ~a bytes of alien buf ~a~%" +RX-BUFFER-CAPACITY+ (alien-sap rxbuf))
     (sb-alien:free-alien rxbuf)))
+
+(defmethod release-connection ((conn https-connection))
+  ;; TODO: fix this... for now it memory leaks
+  (with-slots (socket) conn
+    (disconnect socket)))
+
+(defgeneric is-https-p (conn))
+(defmethod is-https-p (conn) nil)
+(defmethod is-https-p ((conn https-connection)) t)

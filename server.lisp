@@ -5,31 +5,40 @@
 (defvar *requests*)
 (defvar *listen-socket*)
 (defvar *stop* nil)
+(defvar *ssl-context*)
+(defvar *hostname* "localhost")
 
-(defun start (&optional (port 5000))
+(defun start (&optional &key (https-p t) (port 5000) cert-path key-path)
   (let ((dispatcher (make-dispatcher))
-	(*connections* (make-hash-table)))
+	(*connections* (make-hash-table))
+	(*ssl-context* (if https-p (tls:make-tls-context nil "/etc/ssl/certs" t) nil)))
     (with-dispatcher (dispatcher)
-      (let ((srv-socket (make-tcp-listen-socket port)))
-	(set-non-blocking srv-socket)
+      (tls:with-tls-context *ssl-context*
+	(let ((srv-socket (make-tcp-listen-socket port)))
+	  (set-non-blocking srv-socket)
 
-	(on-read srv-socket #'accept-new-http-connection)
+	  (if https-p
+	      (progn
+		(tls:load-cert cert-path)
+		(tls:load-key key-path)
+		(on-read srv-socket #'accept-https-connection))
+	      (on-read srv-socket #'accept-http-connection))
 
-	(loop until *stop*
-	   do
-	     (let ((events (wait-for-events)))
-	       (dispatch-events events)))
+	  (loop until *stop*
+	     do
+	       (let ((events (wait-for-events)))
+		 (dispatch-events events)))
 
-	(loop for sock being the hash-key in *connections*
-	   using (hash-value val)
-	   do
-	     (rem-socket sock)
-	     (remhash sock *connections*)
-	     (disconnect sock))
+	  (loop for sock being the hash-key in *connections*
+	     using (hash-value val)
+	     do
+	       (rem-socket sock)
+	       (remhash sock *connections*)
+	       (disconnect sock))
 
-	(disconnect srv-socket)))))
+	  (disconnect srv-socket))))))
 
-(defun accept-new-http-connection (ctx event)
+(defun accept-http-connection (ctx event)
   (declare (ignore event))
   (with-slots ((listen-socket reactor.dispatch::socket)) ctx
     (loop
@@ -43,36 +52,110 @@
 	   (operation-interrupted ()
 	     (format t "accept() got interrupted. retrying...~%"))
 	   (operation-would-block ()
-	     ;(format t "done accepting~%")
 	     (loop-finish))))))
 
+(defun accept-https-connection (ctx event)
+  (declare (ignore event))
+  (with-slots ((listen-socket reactor.dispatch::socket)) ctx
+    (loop
+       do
+	 (handler-case
+	     (let ((new-socket (accept listen-socket)))
+	       (set-non-blocking new-socket)
+	       (setf (gethash new-socket *connections*) (make-https-connection new-socket))
+	       (on-read new-socket #'https-connect-handler)
+	       (on-disconnect new-socket #'http-disconnect-handler))
+	   (operation-interrupted ()
+	     (format t "accept() got interrupted. retrying...~%"))
+	   (operation-would-block ()
+	     (loop-finish))))))
+
+(defun https-connect-handler (ctx event)
+  "Performs the TLS handshake and establishes the HTTPS connection.
+This function is called on write ready event from a reactor."
+  (declare (ignorable event))
+  (let* ((socket (context-socket ctx))
+	 (httpsconn (gethash socket *connections*))
+	 (ctxdata (context-data ctx))
+	 (tls (if ctxdata
+		  (https-tls-context ctxdata)
+		  (tls:accept (socket:socket-fd socket)))))
+    (unless ctxdata
+      (format t "context is ~a~%" ctxdata)
+      (with-slots (ssl-context ssl-stream) httpsconn
+	(format t "setting streams and context~%")
+	(setf ssl-context tls
+	      ssl-stream (tls:make-tls-stream *ssl-context* tls)))
+      (setf (context-data ctx) httpsconn))
+
+    (format t "https connect handler about to perform a handshake evt=~a~%" event)
+    (let ((err (tls:ssl-do-handshake tls)))
+      (cond
+	((= err 1)
+	 (format t "handshake complete~%")
+	 (on-read socket #'http-rx-handler)) ; switch to normal processing
+	((<= err 0)
+	 (format t "handshake returned ... ~A~%" err)
+	 (let ((code (tls::ssl-get-error tls err)))
+	   (cond
+	     ((= code tls:+SSL-ERROR-WANT-READ+)
+	      (format t "want read~%")) ; do nothing?
+	     ((= code tls:+SSL-ERROR-WANT-WRITE+)
+	      (format t "want write~%")
+	      (del-read socket) ; switch to write polling
+	      (on-write socket #'https-connect-handler))
+	     (t (http-disconnect-handler ctx event)))))))))
+
 (defun http-tx-handler (ctx event)
+  (declare (ignore event))
   (with-slots ((socket reactor.dispatch::socket)) ctx
-    (let ((conn (gethash socket *connections*)))
-      (with-slots (txq) conn
-	(let* ((elem (queue-peek txq))
-	       (xfered (cdr (assoc :xfered elem)))
-	       (size (cdr (assoc :size elem)))
-	       (resp (cdr (assoc :data elem)))
-	       (req (cdr (assoc :request elem)))
-	       (hdrs (http-request-headers req)))
-	  #+debug (format t "xfered=~a~%" xfered)
-	  #+debug (format t "size=~a~%" size)
-	  #+debug
-	  (format t "~a~%"
-		  (loop for key being the hash-key in hdrs
-		     using (hash-value val)
-		     collect (cons key val)))
-	  (let ((nsent (send-response socket resp xfered (- size xfered))))
-	    (incf (cdr (assoc :xfered elem)) nsent)
-	    (when (= (cdr (assoc :xfered elem)) size)
-	      (dequeue txq)
-	      (when (queue-empty-p txq)
-		(del-write socket))
-	      (when (string= (string-downcase (gethash "Connection" hdrs)) "close")
-		(rem-socket socket)
-		(remhash socket *connections*)
-		(release-http-connection conn)))))))))
+    (handler-case
+	(let ((conn (gethash socket *connections*)))
+	  (with-slots (txq) conn
+	    (let* ((elem (queue-peek txq))
+		   (xfered (cdr (assoc :xfered elem)))
+		   (size (cdr (assoc :size elem)))
+		   (resp (cdr (assoc :data elem)))
+		   (req (cdr (assoc :request elem)))
+		   (hdrs (http-request-headers req))
+		   (nsent 0))
+	      (tagbody
+	       continue
+		 (setf nsent
+		       (send-response (if (is-https-p conn) conn socket)
+				      resp
+				      xfered
+				      (- size xfered)))
+		 (format t "before send xfered: ~a~%" (assoc :xfered elem))
+		 (incf (cdr (assoc :xfered elem)) nsent)
+		 (incf xfered nsent)
+		 (format t "after send xfered: ~a~%" (assoc :xfered elem))
+		 (cond
+		   ((= (cdr (assoc :xfered elem)) size)
+		    (format t "dequeuing response after completion.~%")
+		    (dequeue txq)
+		    (when (queue-empty-p txq)
+		      (del-write socket))
+		    (when (string= (string-downcase (gethash "Connection" hdrs)) "close")
+		      (rem-socket socket)
+		      (remhash socket *connections*)
+		      (release-connection conn)))
+		   ((< (cdr (assoc :xfered elem)) size)
+		    (go continue)))))))
+      (tls:tls-wants-read ()
+	(on-read socket #'http-tx-handler))
+
+      (tls:tls-wants-write ()
+	t)
+
+      (tls:tls-zero-return ()
+	(rem-socket socket)
+	(release-connection (gethash socket *connections*))
+	(remhash socket *connections*))
+
+      (operation-would-block () t)
+      
+      )))
 
 (defun http-disconnect-handler (ctx event)
   (with-slots ((socket reactor.dispatch::socket)) ctx
@@ -81,7 +164,7 @@
 	(with-slots (socket) conn
 	  (rem-socket socket)
 	  (remhash socket *connections*)
-	  (release-http-connection conn))))))
+	  (release-connection conn))))))
 
 (defun wraps-around? (start len cap)
   (>= (+ start len) cap))
@@ -106,7 +189,9 @@
 	      (format t "#3. single receive into pos ~a of ~a bytes~%" (mask wr) nfree)
 	      (incf wr (receive socket (list ptr) (list nfree)))))))))
 
-(defun try-receive (conn)
+(defgeneric try-receive (connection))
+
+(defmethod try-receive ((conn http-connection))
   (with-slots (rxbuf rxcap rd wr) conn
     (let* ((size (- wr rd))
 	   (full? (= size rxcap)))
@@ -117,17 +202,18 @@
 	    (format t "read ~a bytes~%" rxbytes)
 	    rxbytes)))))
 
+(defmethod try-receive ((conn https-connection))
+  (tls:tls-read (https-tls-stream conn)))
+
 (defun http-rx-handler (ctx event)
   (with-slots ((socket reactor.dispatch::socket)) ctx
     (handler-case
 	(let* ((conn (gethash socket *connections*))
-	       (peer (get-peer-name (socket-fd socket)))
-	       (rd (slot-value conn 'rd))
-	       (wr (slot-value conn 'wr)))
+	       (peer (get-peer-name (socket-fd socket))))
 	  (loop
 	     do
-	       (try-receive conn)
 	       (multiple-value-bind (complete? lines) (try-parse conn)
+		 (format t "try-parse returned ~a ~a~%" complete? lines)
 		 (when (and lines (not complete?))
 		   (error "request parsing problem?~%"))
 		 (when (and complete? lines)
@@ -142,7 +228,17 @@
 			       (cons :request req))
 			      (slot-value conn 'txq))
 
-		     (on-write socket #'http-tx-handler))))))
+		     (on-write socket #'http-tx-handler))))
+	       (try-receive conn)))
+      (tls:tls-wants-read ()  (format t "tls operation would block on read.~%"))
+
+      (tls:tls-wants-write () (format t "tls operation would block on write.~%"))
+
+      (tls:tls-zero-return ()
+	(rem-socket socket)
+	(release-connection (gethash socket *connections*))  
+	(remhash socket *connections*))
+      
       (operation-would-block ()
 	#+debug (format t "operation would block. will re-try later...~%")
 	t)
@@ -150,22 +246,21 @@
 	;; someone sent us a wrong protocol version we don't support.
 	;; close the socket. don't bother sending any responses out.
 	(let ((conn (gethash socket *connections*)))
-	  (with-slots (socket) conn
-	    (rem-socket socket)
-	    (remhash socket *connections*)
-	    (release-http-connection conn))))
+	  (rem-socket socket)
+	  (remhash socket *connections*)
+	  (release-connection conn)))
       (socket-read-error ()
 	(let ((conn (gethash socket *connections*)))
 	  (with-slots (socket) conn
 	    (rem-socket socket)
 	    (remhash socket *connections*)
-	    (release-http-connection conn))))
+	    (release-connection conn))))
       (socket-eof ()
 	(let ((conn (gethash socket *connections*)))
 	  (with-slots (socket) conn
 	    (rem-socket socket)
 	    (remhash socket *connections*)
-	    (release-http-connection conn)))))))
+	    (release-connection conn)))))))
 
 (defun buf-char (buf pos)
   (code-char (deposit-field (deref buf pos) (byte 8 0) 0)))
@@ -176,7 +271,9 @@
        (loop for i from start below end
 	  collect (buf-char buf (logand i 4095)))))
 
-(defun try-parse (conn)
+(defgeneric try-parse (conn))
+
+(defmethod try-parse ((conn http-connection))
   (with-slots (socket rd rdsofar wr rxcap rxbuf lines) conn
     (loop for i = rdsofar then (1+ i) until (= i wr)
        with complete = nil
@@ -194,6 +291,27 @@
 	   (push line lines))
        finally
 	 (return (values complete (if complete (nreverse lines) '()))))))
+
+(defmethod try-parse ((conn https-connection))
+  (with-slots (socket lines ssl-context ssl-stream) conn
+    (loop
+       for line = (tls::tls-read-line ssl-stream :CRLF)
+       then (tls::tls-read-line ssl-stream :CRLF)
+       with complete = nil
+       while line
+       do
+	 (format t "read line: '~a'~%" line)
+       if (and line (zerop (length line))) do
+	 (setf complete t)
+	 (loop-finish)
+       else do
+	 (push line lines)
+       finally
+	 (format t "terminating the loop: complete? = ~a~%" complete)
+	 (return (values complete
+			 (if complete
+			     (nreverse lines)
+			     nil))))))
 
 (defun status-line (proto code reason)
   (with-output-to-string (out)
@@ -234,7 +352,10 @@
 		  (t (aref msg i)))))
     bytes))
 
-(defun send-response (socket resp pos len)
+(defgeneric send-response (conn-or-socket resp pos len)
+  (:documentation "Send the response bytes over the corresponding connection stream"))
+
+(defmethod send-response ((socket integer) resp pos len)
   (when (zerop len)
     (error "zero length response size?"))
   (let ((buf (make-alien (unsigned 8) len)))
@@ -246,3 +367,14 @@
       ;(format t "freeing ~a bytes of alien buf ~a~%" len (alien-sap buf))
       (free-alien buf)
       nsent)))
+
+(defmethod send-response ((conn https-connection) resp pos len)
+  (when (zerop len)
+    (error "zero length response size?"))
+
+  (format t "sending response ~a-~a (~a bytes)~%" pos (+ pos len) len)  
+  (let ((nwritten (tls::tls-write-byte-sequence
+		   (https-tls-stream conn)
+		   (subseq resp pos (+ pos len)))))
+    (format t "nwritten=~a~%" nwritten)
+    nwritten))
