@@ -59,7 +59,7 @@
       (values method uri proto))))
 
 (defun read-header-name (tok)
-  (subseq tok 0 (length tok)))
+  (intern (string-upcase (subseq tok 0 (length tok))) :keyword))
 
 (defun read-header-value (in)
   (let ((line (read-line in nil nil)))

@@ -12,7 +12,9 @@
   (uri nil)
   (params nil)
   (proto nil)
-  (headers (make-hash-table :test 'string= :synchronized t)))
+  (body nil)
+  (body-sofar 0)
+  (headers (make-hash-table :test 'eq :synchronized t)))
 
 (defun process-request (req)
   (with-slots (peer method uri headers) req
@@ -54,3 +56,13 @@
        (defun ,name (request)
 	 ,@body)
        (setf (gethash ,path *routes*) #',name))))
+
+
+;;
+;;  (defroute "/" (req) ... )
+;;  (defroute ("/" :GET) (req) ... )
+;;  (defroute "/foo/bar/:userid:/" ...)
+
+;; (defroute "/foo/bar/:uid:/")
+
+

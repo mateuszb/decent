@@ -11,11 +11,13 @@
    (rdsofar :type '(unsigned-byte 32) :initform 0 :initarg :rdsofar :reader read-so-far)
    (wr :type '(unsigned-byte 32) :initform 0 :initarg :wr :reader write-position)
    (lines :initform '())
+   (request :initform nil :initarg :request)
    (txq :initform (make-queue 16))))
 
 (defclass https-connection ()
   ((socket :reader socket :initform nil :initarg :socket)
    (lines :initform '())
+   (request :initform nil :initarg :request)
    (txq :initform (make-queue 16))
    (ssl-context :initform nil :initarg :ssl-context :reader https-tls-context)
    (ssl-stream :initform nil :initarg :ssl-stream :reader https-tls-stream)))
