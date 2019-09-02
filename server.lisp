@@ -8,10 +8,13 @@
 (defvar *hostname* "localhost")
 (defvar *request* nil
   "The current http request being processed")
+
 (defparameter +MAX-REQUEST-BODY-SIZE+ (* 8192 10))
 
 (defun start (&optional &key (https-p t) (port 5000) cert-path key-path)
   (start-server
+   cert-path
+   key-path
    port
    #'http-accept-connection
    #'http-rx-handler
