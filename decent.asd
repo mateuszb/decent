@@ -5,10 +5,9 @@
   :depends-on ("socket"
 	       "reactor"
 	       "string-case"
-	       "cl-speedy-queue"
 	       "socket"
 	       "cl-ppcre"
-	       "tls")
+	       "tls-1.3")
   :components ((:file "packages")
 	       (:file "request" :depends-on ("packages"))
 	       (:file "parse" :depends-on ("packages" "request"))
