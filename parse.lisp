@@ -1,7 +1,7 @@
 (in-package :decent)
 
-(define-condition protocol-error ()
-  ((protocol :initform nil :initarg :protocol)))
+(define-condition protocol-error (error)
+  ((protocol :initform nil :initarg :protocol :accessor protocol)))
 
 (defun is-separator? (c sep)
   (char= c sep))
@@ -32,7 +32,7 @@
   (string-case (tok)
     ("HTTP/1.1" :http1.1)
     ("HTTP/1.0" :http1.0)
-    (t :unsupported-protocol)))
+    (t tok)))
 
 (defun find-separators (uri)
   (mapcan (lambda (x y)
@@ -55,7 +55,7 @@
 	  (uri (parse-uri-path (consume-token in)))
 	  (proto (read-proto (string-upcase (consume-token in)))))
       (unless (member proto '(:http1.1 :http1.0))
-	  (error (make-condition 'protocol-error :protocol proto)))
+	  (error 'protocol-error :protocol proto))
       (values method uri proto))))
 
 (defun read-header-name (tok)
@@ -72,17 +72,16 @@
 	  (val (read-header-value in)))
       (values key val))))
 
+(defun collect-request-headers (header-lines)
+  (loop for hdrline in (cdr header-lines)
+     with hdrs = (make-hash-table :test 'equal :synchronized t)
+     do (multiple-value-bind (key val) (parse-header-line hdrline)
+	  (setf (gethash key hdrs) val))
+     finally (return hdrs)))
+
 (defun parse-request (peer lines)
   (let ((req (multiple-value-list (parse-request-line (car lines))))
-	(hdrs
-	 (loop for hdrline in (cdr lines)
-	    with hdrs = (make-hash-table :test 'equal :synchronized t)
-	    do
-	      (multiple-value-bind (key val) (parse-header-line hdrline)
-		#+debug
-		(format t "~a: ~a~%" key val)
-		(setf (gethash key hdrs) val))
-	    finally (return hdrs))))
+	(hdrs (collect-request-headers (cdr lines))))
     (make-http-request
      :peer peer
      :method (first req)

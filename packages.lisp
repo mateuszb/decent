@@ -16,10 +16,17 @@
 		:make-ring-buffer
 		:stream-size
 		:stream-peek-char)
+
   (:import-from :tls
 		:data
 		:start-server
 		:tls-read
-		:tls-write)
+		:tls-write
+		:tls-close)
+
   (:import-from :flexi-streams
-		:with-input-from-sequence))
+		:with-input-from-sequence)
+
+  (:import-from :cl-ppcre
+		:scan-to-strings)
+  )

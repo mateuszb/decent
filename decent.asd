@@ -7,13 +7,14 @@
 	       "string-case"
 	       "socket"
 	       "cl-ppcre"
+	       "quri"
 	       "tls-1.3")
   :components ((:file "packages")
 	       (:file "request" :depends-on ("packages"))
 	       (:file "parse" :depends-on ("packages" "request"))
+	       (:file "routing" :depends-on ("packages"))
 	       (:file "connection" :depends-on ("packages"))
-	       (:file "server" :depends-on ("packages" "parse" "connection"))
-	       #+off(:file "trie" :depends-on ("packages")))
+	       (:file "server" :depends-on ("packages" "parse" "connection")))
   :in-order-to ((test-op (test-op "decent/test")))
   :description "a small http web server")
 

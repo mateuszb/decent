@@ -49,20 +49,3 @@
 	     )
 	    "NOT FOUND
 ")))))
-
-(defmacro defroute ((path method) &body body)
-  (let ((name (gensym "HANDLER-")))
-    `(progn
-       (defun ,name (request)
-	 ,@body)
-       (setf (gethash ,path *routes*) #',name))))
-
-
-;;
-;;  (defroute "/" (req) ... )
-;;  (defroute ("/" :GET) (req) ... )
-;;  (defroute "/foo/bar/:userid:/" ...)
-
-;; (defroute "/foo/bar/:uid:/")
-
-
