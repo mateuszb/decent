@@ -8,7 +8,9 @@
 	:sb-alien)
   (:export
    :start
-   :defroute)
+   :defroute
+   :make-route
+   :make-router)
 
   (:import-from :alien-ring
 		:make-binary-ring-stream

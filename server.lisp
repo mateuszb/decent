@@ -45,6 +45,16 @@
 	  '(#\return #\newline) '(#\return #\newline)))
     (tls-close tls)))
 
+(defun not-found (http-conn)
+  '(404
+    (("Host". "hackingrun.com")
+     ("Content-Length" . 11)
+     ("Content-Type" . "text/plain")
+     ("Connection" . "close")
+     )
+    "NOT FOUND
+"))
+
 (defun http-rx-handler (http-conn bytes-to-read)
   ;; try parsing the rxbuffer and see if we can get a complete request
   ;; out of it
@@ -59,8 +69,14 @@
 	      )
 
 	    (let ((response (process-request req)))
-	      (let ((bytes (format-response response)))
-		(tls-write (tls http-conn) bytes))))))
+	      (cond
+		((null response)
+		 (tls-write
+		  (tls http-conn)
+		  (format-response (not-found http-conn))))
+		(t
+		 (let ((bytes (format-response response)))
+		   (tls-write (tls http-conn) bytes))))))))
     (protocol-error (e)
       (format t "Client requested unsupported protocol: ~a~%" (protocol e))
       (bad-request http-conn))))
@@ -94,7 +110,6 @@
     (tagbody
      next-line
        (let ((line (parse-single-line stream (last-parse-pos http-conn))))
-	 (format t "single line: '~a'~%" line)
 	 (cond
 	   ((null line) ; no complete line returned yet. stop parsing.
 	    (return-from try-parse nil))
@@ -102,7 +117,6 @@
 	   ((= (length line) 0)
 	    (let ((result (nreverse (request-lines http-conn))))
 	      (setf (request-lines http-conn) nil)
-	      (format t "lines: ~a~%" result)
 	      (return-from try-parse result)))
 
 	   (t ; normal line
@@ -170,9 +184,7 @@
   (when (zerop len)
     (error "zero length response size?"))
 
-  (format t "sending response ~a-~a (~a bytes)~%" pos (+ pos len) len)
   (let ((nwritten (tls::tls-write-byte-sequence
 		   (https-tls-stream conn)
 		   (subseq resp pos (+ pos len)))))
-    (format t "nwritten=~a~%" nwritten)
     nwritten))

@@ -14,7 +14,7 @@
 	       (:file "parse" :depends-on ("packages" "request"))
 	       (:file "routing" :depends-on ("packages"))
 	       (:file "connection" :depends-on ("packages"))
-	       (:file "server" :depends-on ("packages" "parse" "connection")))
+	       (:file "server" :depends-on ("routing" "parse" "connection")))
   :in-order-to ((test-op (test-op "decent/test")))
   :description "a small http web server")
 
