@@ -2,7 +2,6 @@
   (:use :cl
 	:socket
 	:reactor
-	:reactor.dispatch
 	:string-case
 	:sb-sys
 	:sb-alien)

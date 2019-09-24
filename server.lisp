@@ -27,13 +27,12 @@
   (make-https-connection tlsctx))
 
 (defun http-disconnect-handler (ctx event)
-  (with-slots ((socket reactor.dispatch::socket)) ctx
-    (let ((conn (gethash socket *connections*)))
+  (with-slots (handle) ctx
+    (let ((conn (gethash (handle-key handle) *connections*)))
       (when conn
-	(with-slots (socket) conn
-	  (rem-socket socket)
-	  (remhash socket *connections*)
-	  (release-connection conn))))))
+	(rem-socket handle)
+	(remhash (handle-key handle) *connections*)
+	(release-connection conn)))))
 
 (define-condition waiting-for-body (condition) ())
 
