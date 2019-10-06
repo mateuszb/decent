@@ -1,6 +1,6 @@
 (in-package :decent)
 
-(defclass route (t)
+(defclass route ()
   ((path :type 'string)
    (method :type 'keyword)))
 
