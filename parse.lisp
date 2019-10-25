@@ -73,7 +73,7 @@
       (values key val))))
 
 (defun collect-request-headers (header-lines)
-  (loop for hdrline in (cdr header-lines)
+  (loop for hdrline in header-lines
      with hdrs = (make-hash-table :test 'equal :synchronized t)
      do (multiple-value-bind (key val) (parse-header-line hdrline)
 	  (setf (gethash key hdrs) val))
