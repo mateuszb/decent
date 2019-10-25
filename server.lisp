@@ -9,18 +9,21 @@
 (defvar *request* nil
   "The current http request being processed")
 
+(defvar *handler*)
+
 (defparameter +MAX-REQUEST-BODY-SIZE+ (* 8192 10))
 
-(defun start (&optional &key (https-p t) (port 5000) cert-path key-path)
-  (start-server
-   cert-path
-   key-path
-   port
-   #'http-accept-connection
-   #'http-rx-handler
-   nil;#'http-tx-handler
-   nil
-   #'http-disconnect-handler))
+(defun start (&key (port 5000) cert-path key-path top-level-handler)
+  (let ((*handler* top-level-handler))
+    (start-server
+     cert-path
+     key-path
+     port
+     #'http-accept-connection
+     #'http-rx-handler
+     nil;#'http-tx-handler
+     nil
+     #'http-disconnect-handler)))
 
 (defun http-accept-connection (tlsctx)
   (format t "TLS connection accepted~%")
@@ -61,9 +64,11 @@
       (let ((lines (try-parse http-conn))
 	    (peer (get-peer-name (socket-fd (tls:socket (tls http-conn))))))
 	(when lines
+	  (format t "lines=~a~%" lines)
 	  (let ((req (parse-request peer lines)))
 	    (setf (http-request http-conn) req)
 	    (when (gethash :content-length (http-request-headers req))
+	      (format t "content length = ~a~%" (gethash :content-length (http-request-headers req)))
 	      ;; TODO: implement body processing?
 	      )
 

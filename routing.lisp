@@ -1,6 +1,37 @@
 (in-package :decent)
 
 (defvar *next-route*)
+(defvar *router*)
+
+(defmacro header= (header-key val &optional prefix)
+  (let ((hdrvar (gensym))
+	(lenvar (gensym)))
+    `(lambda (req)
+       (with-slots (headers) req
+	 (let ((,hdrvar (gethash ,header-key headers ""))
+	       (,lenvar (length ,val)))
+	   (when (and ,hdrvar ,(if prefix
+				   `(>= (length ,hdrvar) ,lenvar)
+				   `(= (length ,hdrvar) ,lenvar)))
+	     ,(if prefix
+		  `(and (string= ,val (subseq ,hdrvar 0 ,lenvar)) req)
+		  `(and (string= ,val ,hdrvar) req))))))))
+
+(defmacro host= (hostname &optional prefix)
+  `(header= :host ,hostname ,prefix))
+
+(defmacro user-agent= (user-agent &optional prefix)
+  `(header= :user-agent ,user-agent ,prefix))
+
+(defmacro uri= (uri &optional prefix)
+  `(lambda (req)
+     ,(if prefix `(string= ,uri (subseq (http-request-uri req) 0 (length ,uri)))
+	  `(string= ,uri (http-request-uri req)))))
+
+(defun method= (method)
+  `(lambda (req)
+     (when (eq (http-request-method req) ,method)
+       req)))
 
 (defclass router ()
   ((routes :initform nil :initarg :routes :accessor routes)))
@@ -12,8 +43,6 @@
 
 (defun make-router ()
   (make-instance 'router))
-
-(defvar *router* (make-router))
 
 (defun add-route (router new-route)
   (loop for r on (routes router)
@@ -32,8 +61,10 @@
 (defun next-route ()
   (funcall *next-route*))
 
-(defun dispatch (routes method uri)
+(defun dispatch (routes request)
   (loop for (hd . tl) on routes
+     with method = (http-request-method request)
+     with uri = (http-request-uri request)
      do
        (when (or (eq (route-method hd) method) (eq (route-method hd) :ANY))
 	 (multiple-value-bind (match regs) (scan-to-strings (route-regex hd) uri)
@@ -42,7 +73,7 @@
 			(if (> (length regs) 0)
 			    (map 'list #'identity regs)
 			    nil)))
-	       (let ((*next-route* (lambda () (dispatch tl method uri))))
+	       (let ((*next-route* (lambda () (dispatch tl request))))
 		 (let ((response
 			(apply (route-handler hd) (regs->args regs))))
 		   (return response)))))))))
