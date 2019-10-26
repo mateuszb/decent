@@ -8,6 +8,7 @@
 
 (defclass scope ()
   ((matcher :initform nil :initarg :matchfn :accessor scope-matcher)
+   (spec :initform nil :initarg :spec :accessor scope-spec)
    (router :initform nil :initarg :router :accessor scope-router)))
 
 (defmethod print-object ((a app) stream)
@@ -16,7 +17,7 @@
 
 (defmethod print-object ((s scope) stream)
   (print-unreadable-object (s stream :type t)
-    (format stream "~a" (scope-router s))))
+    (format stream "spec: ~a, ~a" (scope-spec s) (scope-router s))))
 
 (defmacro make-app (port &body scopes)
   `(make-instance 'app :port ,port :scopes (list ,@scopes)))
@@ -32,6 +33,7 @@
       `(let ((,router (make-router)))
 	 ,@route-additions
 	 (make-instance 'scope :matchfn (make-scope-matcher ,scope-spec)
+			:spec ',scope-spec
 			:router ,router)))))
 
 (defmacro make-scope-matcher (scope-spec)
