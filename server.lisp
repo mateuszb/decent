@@ -1,6 +1,7 @@
 (in-package :decent)
 
 (declaim (optimize (debug 3) (speed 0)))
+
 (defparameter +BUFFER-SIZE+ 8192)
 
 (defvar *requests*)
@@ -60,37 +61,51 @@
 "))
 
 (defun http-rx-handler (http-conn bytes-to-read)
+  (format t "bytes to read: ~a~%" bytes-to-read)
   ;; try parsing the rxbuffer and see if we can get a complete request
   ;; out of it
   (handler-case
-      (let* ((lines (try-parse http-conn))
-	     (tls (tls http-conn))
-	     (peer (get-peer-name (socket-fd (tls:socket tls)))))
-	(when lines
-	  (format t "lines=~a~%" lines)
-	  (let ((req (parse-request peer lines)))
-	    (setf (http-request http-conn) req)
-	    (when (gethash :content-length (http-request-headers req))
-	      (format t "content length = ~a~%" (gethash :content-length (http-request-headers req)))
-	      ;; TODO: implement body processing?
-	      )
+      (progn
+	(unless (http-request http-conn)
+	  (let* ((lines (try-parse http-conn))
+		 (tls (tls http-conn))
+		 (peer (get-peer-name (socket-fd (tls:socket tls)))))
+	    (when lines
+	      (format t "lines=~a~%" lines)
+	      (let ((req (parse-request peer lines)))
+		(setf (http-request http-conn) req)))))
 
-	    (let* ((hdrs (http-request-headers req))
-		  (conn-hdr (gethash :connection hdrs))
-		  (response (process-request req)))
+	(let* ((tls (tls http-conn))
+	       ;(peer (get-peer-name (socket-fd (tls:socket tls))))
+	       (req (http-request http-conn))
+	       (hdrs (http-request-headers req))
+	       (val (gethash :content-length hdrs "0"))
+	       (conn-hdr (gethash :connection hdrs "close"))
+	       (len (when val (parse-integer val))))
 
-	      (when (and conn-hdr response)
-		(setf (cadr response)
-		      (cons (cons "Connection" conn-hdr) (cadr response))))
+	  (when (> len (stream-size (tls::rx-data-stream tls)))
+	    (return-from http-rx-handler))
 
-	      (cond
-		((null response)
-		 (tls-write
-		  (tls http-conn)
-		  (format-response (not-found http-conn))))
-		(t
-		 (let ((bytes (format-response response)))
-		   (tls-write (tls http-conn) bytes))))))))
+	  (when (> len 0)
+	    (let ((array (make-array len :element-type '(unsigned-byte 8))))
+	      (read-sequence array (tls::rx-data-stream tls))
+	      (setf (http-request-body req) array)))
+
+	  (let* ((response (process-request req)))
+	    (when (and conn-hdr response)
+	      (setf (cadr response)
+		    (cons (cons "Connection" conn-hdr) (cadr response))))
+
+	    (cond
+	      ((null response)
+	       (tls-write
+		(tls http-conn)
+		(format-response (not-found http-conn))))
+	      (t
+	       (let ((bytes (format-response response)))
+		 (tls-write (tls http-conn) bytes))))
+
+	    (setf (http-request http-conn) nil))))
 
     (protocol-error (e)
       (format t "Client requested unsupported protocol: ~a~%" (protocol e))

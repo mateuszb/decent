@@ -1,6 +1,7 @@
 (in-package :decent)
 
 (defvar *app*)
+(defvar *request*)
 
 (defclass app ()
   ((port :initform nil :initarg :port :accessor app-port)
@@ -68,7 +69,8 @@
        while (null result)
        do
 	 (with-slots (router matcher) scope
-	   (let ((*router* router))
+	   (let ((*router* router)
+		 (*request* request))
 	     (when (funcall matcher request)
 	       (setf result (dispatch (routes router) request))
 	       (loop-finish))))

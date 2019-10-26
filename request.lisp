@@ -123,10 +123,6 @@
 	(reqvar (gensym))
 	(itervar (gensym)))
     `(lambda (,reqvar)
-       (format t "request var=~a~%" ,reqvar)
-       (loop for k being the hash-key in (http-request-headers ,reqvar)
-	  using (hash-value val)
-	  do (format t "~s=~s~%" k val))
        (loop for ,itervar in (list ,@scopes)
 	  with ,resultvar = nil
 	  while (null ,resultvar)
@@ -135,13 +131,3 @@
 	    (when ,resultvar
 	      (loop-finish))
 	  finally (return ,resultvar)))))
-
-'(serve https on port 8443
-  with certificate = "path/to/cert.der"
-  with key = "path/to/key.der"
-  with passes
-  ((router
-     (with-scope (host "example.com")
-       (:get "/" front-page)
-       (:get "/login" login-page)
-       (:post "/login" login-page-submitted)))))
