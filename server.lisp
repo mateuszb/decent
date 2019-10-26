@@ -1,5 +1,6 @@
 (in-package :decent)
 
+(declaim (optimize (debug 3) (speed 0)))
 (defparameter +BUFFER-SIZE+ 8192)
 
 (defvar *requests*)
@@ -30,10 +31,11 @@
   (make-https-connection tlsctx))
 
 (defun http-disconnect-handler (ctx event)
+  (declare (ignore event))
   (with-slots (handle) ctx
     (let ((conn (gethash (handle-key handle) *connections*)))
       (when conn
-	(rem-socket handle)
+	(rem-handle handle)
 	(remhash (handle-key handle) *connections*)
 	(release-connection conn)))))
 
@@ -61,8 +63,9 @@
   ;; try parsing the rxbuffer and see if we can get a complete request
   ;; out of it
   (handler-case
-      (let ((lines (try-parse http-conn))
-	    (peer (get-peer-name (socket-fd (tls:socket (tls http-conn))))))
+      (let* ((lines (try-parse http-conn))
+	     (tls (tls http-conn))
+	     (peer (get-peer-name (socket-fd (tls:socket tls)))))
 	(when lines
 	  (format t "lines=~a~%" lines)
 	  (let ((req (parse-request peer lines)))
@@ -72,7 +75,14 @@
 	      ;; TODO: implement body processing?
 	      )
 
-	    (let ((response (process-request req)))
+	    (let* ((hdrs (http-request-headers req))
+		  (conn-hdr (gethash :connection hdrs))
+		  (response (process-request req)))
+
+	      (when (and conn-hdr response)
+		(setf (cadr response)
+		      (cons (cons "Connection" conn-hdr) (cadr response))))
+
 	      (cond
 		((null response)
 		 (tls-write
@@ -81,6 +91,7 @@
 		(t
 		 (let ((bytes (format-response response)))
 		   (tls-write (tls http-conn) bytes))))))))
+
     (protocol-error (e)
       (format t "Client requested unsupported protocol: ~a~%" (protocol e))
       (bad-request http-conn))))

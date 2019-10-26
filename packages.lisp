@@ -9,7 +9,23 @@
    :start
    :defroute
    :make-route
-   :make-router)
+   :make-router
+   :make-http-request
+   :http-request-peer
+   :http-request-method
+   :http-request-uri
+   :http-request-params
+   :http-request-proto
+   :http-request-body
+   :http-request-headers
+   :app-handler
+   :make-app
+   :with-scope
+   :make-scope-matcher
+   :route-spec->route
+   :mime-type
+   :*app*
+   :*handler*)
 
   (:import-from :alien-ring
 		:make-binary-ring-stream

@@ -41,6 +41,14 @@
    (regex :initarg :regex :accessor route-regex)
    (handler :initarg :handler :accessor route-handler)))
 
+(defmethod print-object ((r router) stream)
+  (print-unreadable-object (r stream :type t)
+    (format stream "routes=(~{~a~^~%~})" (routes r))))
+
+(defmethod print-object ((r route) stream)
+  (print-unreadable-object (r stream)
+    (format stream "~a ~a -> ~a" (route-method r) (route-regex r) (route-handler r))))
+
 (defun make-router ()
   (make-instance 'router))
 
@@ -53,7 +61,9 @@
 	 (rplaca r new-route)
 	 (mapcar (lambda (r) (format t "~a~%" (route-regex r))) (routes router))
 	 (return-from add-route new-route)))
-  (setf (routes router) (append (routes router) (list new-route))))
+  (let ((new-routes (append (routes router) (list new-route))))
+    (setf (routes router) new-routes;(sort new-routes #'> :key (lambda (x) (length (string-downcase (route-regex x)))))
+	  )))
 
 (defun make-route (method regex handler)
   (make-instance 'route :regex regex :method method :handler handler))
@@ -83,15 +93,17 @@
       '()
       `(&optional ,@args)))
 
-(defmacro defroute (spec args &body body)
+(defmacro defroute (scope spec args &body body)
   (typecase spec
     (string
      ;; spec contains just a regex
      (let ((method :GET)
 	   (regex (format nil "^~a$" spec)))
-       `(add-route *router* (make-route ,method ,regex (lambda ,(mk-fun-args args) ,@body)))))
+       `(let ((*router* (scope-router ,scope)))
+	  (add-route *router* (make-route ,method ,regex (lambda ,(mk-fun-args args) ,@body))))))
     (cons
      ;; spec is (method uri)
      (let ((method (car spec))
 	   (regex (format nil "^~a$" (cadr spec))))
-       `(add-route *router* (make-route ,method ,regex (lambda ,(mk-fun-args args) ,@body)))))))
+       `(let ((*router* (scope-router ,scope)))
+	  (add-route *router* (make-route ,method ,regex (lambda ,(mk-fun-args args) ,@body))))))))

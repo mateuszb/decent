@@ -30,8 +30,9 @@
 
 (defun process-request (req)
   (with-slots (peer method uri headers) req
-    (funcall *handler* req)))
+    (app-handler req)))
 
+#+off
 (defmacro serve (&rest forms)
   (let ((handle-fn (gensym))
 	(reqvar (gensym))

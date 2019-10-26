@@ -1,4 +1,5 @@
 (defsystem "decent"
+  :description "a small http web server"
   :version "0.1.0"
   :author "Mateusz Berezecki"
   :license "BSD"
@@ -8,20 +9,25 @@
 	       "socket"
 	       "cl-ppcre"
 	       "quri"
-	       "tls-1.3")
+	       "tls-1.3"
+	       "trivial-mimes")
   :components ((:file "packages")
 	       (:file "request" :depends-on ("packages"))
 	       (:file "parse" :depends-on ("packages" "request"))
 	       (:file "routing" :depends-on ("packages"))
 	       (:file "connection" :depends-on ("packages"))
-	       (:file "server" :depends-on ("routing" "parse" "connection")))
+	       (:file "server" :depends-on ("routing" "parse" "connection"))
+	       (:file "app" :depends-on ("packages")))
   :in-order-to ((test-op (test-op "decent/test")))
-  :description "a small http web server")
+)
 
 (defsystem "decent/test"
-  :depends-on ("prove")
-  :defsystem-depends-on (:prove-asdf)
-  :serial t
-  :components ((:module "tests" :components ((:test-file "test"))))
-  :perform (test-op :after (o c)
-		    (funcall (intern #.(string :run) :prove) c)))
+  :depends-on ("decent" "fiveam")
+  :components ((:module "tests"
+		:serial t
+		:components
+		((:file "package")
+		 (:file "tests" :depends-on ("package")))))
+  :perform (test-op (o s)
+		    (uiop:symbol-call :fiveam :run!
+				      (intern #.(string :all-tests) :decent.test))))
