@@ -25,7 +25,10 @@
    :route-spec->route
    :mime-type
    :*app*
-   :*handler*)
+   :*handler*
+   :app-scopes
+   :scope-router
+   :scope-matcher)
 
   (:import-from :alien-ring
 		:make-binary-ring-stream
